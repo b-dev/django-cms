@@ -365,7 +365,7 @@ class Page(with_metaclass(PageMetaClass, MPTTModel)):
 
         user = getattr(_thread_locals, "user", None)
         if user:
-            self.changed_by = user.username
+            self.changed_by = user.USERNAME_FIELD #username
         else:
             self.changed_by = "script"
         if created:
