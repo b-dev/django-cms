@@ -45,6 +45,9 @@ DEFAULTS = {
     'MEDIA_PATH': 'cms/',
     'PAGE_MEDIA_PATH': 'cms_page_media/',
     'TITLE_CHARACTER': '+',
+    'PAGE_CACHE': True,
+    'PLACEHOLDER_CACHE': True,
+    'PLUGIN_CACHE': True,
     'CACHE_PREFIX': 'cms-',
     'PLUGIN_PROCESSORS': [],
     'PLUGIN_CONTEXT_PROCESSORS': [],
@@ -75,7 +78,8 @@ def get_media_url():
 
 def get_templates():
     templates = list(getattr(settings, 'CMS_TEMPLATES', []))
-    templates.append((constants.TEMPLATE_INHERITANCE_MAGIC, _('Inherit the template of the nearest ancestor')))
+    if get_cms_setting('TEMPLATE_INHERITANCE'):
+        templates.append((constants.TEMPLATE_INHERITANCE_MAGIC, _('Inherit the template of the nearest ancestor')))
     return templates
 
 
@@ -187,9 +191,17 @@ def _ensure_languages_settings(languages):
 
 
 def get_languages():
+    if not isinstance(settings.SITE_ID, int):
+        raise ImproperlyConfigured(
+            "SITE_ID must be an integer"
+        )
     if not settings.USE_I18N:
         return _ensure_languages_settings(
             {settings.SITE_ID: [{'code': settings.LANGUAGE_CODE, 'name': settings.LANGUAGE_CODE}]})
+    if not settings.LANGUAGE_CODE in dict(settings.LANGUAGES):
+        raise ImproperlyConfigured(
+                        'LANGUAGE_CODE "%s" must have a matching entry in LANGUAGES' % settings.LANGUAGE_CODE
+                    )
     languages = getattr(settings, 'CMS_LANGUAGES', {
         settings.SITE_ID: [{'code': code, 'name': _(name)} for code, name in settings.LANGUAGES]
     })

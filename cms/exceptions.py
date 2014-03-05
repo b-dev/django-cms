@@ -21,6 +21,9 @@ class AppAlreadyRegistered(Exception):
 class ToolbarAlreadyRegistered(Exception):
     pass
 
+class ToolbarNotRegistered(Exception):
+    pass
+
 
 class NotImplemented(Exception):
     pass
@@ -51,6 +54,11 @@ class NoPermissionsException(PermissionsException):
 class PublicIsUnmodifiable(Exception):
     """A method was invoked on the public copy, but is only valid for the
     draft version"""
+    pass
+
+
+class PublicVersionNeeded(Exception):
+    """A Public version of this page is needed"""
     pass
 
 

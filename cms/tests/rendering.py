@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import with_statement
+
+from django.core.cache import cache
+from django.template import Template, RequestContext
+from sekizai.context import SekizaiContext
+
 from cms import plugin_rendering
 from cms.api import create_page, add_plugin
 from cms.models.placeholdermodel import Placeholder
@@ -8,10 +13,6 @@ from cms.plugin_rendering import render_plugins, PluginContext, render_placehold
 from cms.test_utils.testcases import SettingsOverrideTestCase
 from cms.test_utils.util.context_managers import SettingsOverride, ChangeModel
 from cms.test_utils.util.mock import AttributeObject
-from django.contrib.auth.models import User
-from django.template import Template, RequestContext
-from sekizai.context import SekizaiContext
-from cms.toolbar.toolbar import CMSToolbar
 
 TEMPLATE_NAME = 'tests/rendering/base.html'
 
@@ -41,9 +42,8 @@ class RenderingTestCase(SettingsOverrideTestCase):
 
     def setUp(self):
         super(RenderingTestCase, self).setUp()
-        self.test_user = User(username="test", is_staff=True, is_active=True, is_superuser=True)
-        self.test_user.set_password("test")
-        self.test_user.save()
+        self.test_user = self._create_user("test", True, True)
+        
         with self.login_user_context(self.test_user):
             self.test_data = {
                 'title': u'RenderingTestCase-title',
@@ -85,13 +85,13 @@ class RenderingTestCase(SettingsOverrideTestCase):
                    body=self.test_data['text_main'])
         add_plugin(self.test_placeholders['sub'], 'TextPlugin', 'en',
                    body=self.test_data['text_sub'])
-        p.publish()
+        p.publish('en')
 
         # Insert another page that is not the home page
         p2 = create_page(self.test_data2['title'], TEMPLATE_NAME, 'en',
                          parent=p, slug=self.test_data2['slug'], published=True,
                          reverse_id=self.test_data2['reverse_id'])
-        p2.publish()
+        p2.publish('en')
 
         # Insert another page that is not the home page
         p3 = create_page(self.test_data3['title'], TEMPLATE_NAME, 'en',
@@ -104,7 +104,7 @@ class RenderingTestCase(SettingsOverrideTestCase):
             # # Insert some test Text plugins
         add_plugin(self.test_placeholders3['sub'], 'TextPlugin', 'en',
                    body=self.test_data3['text_sub'])
-        p3.publish()
+        p3.publish('en')
 
         # Insert another page that is not the home
         p4 = create_page(self.test_data4['title'], 'extra_context.html', 'en', parent=p)
@@ -114,7 +114,7 @@ class RenderingTestCase(SettingsOverrideTestCase):
             self.test_placeholders4[placeholder.slot] = placeholder
             # Insert some test plugins
         add_plugin(self.test_placeholders4['extra_context'], 'ExtraContextPlugin', 'en')
-        p4.publish()
+        p4.publish('en')
 
         # Reload test pages
         self.test_page = self.reload(p.publisher_public)
@@ -193,6 +193,7 @@ class RenderingTestCase(SettingsOverrideTestCase):
         t = u'{% load cms_tags %}{% placeholder "extra_context" %}'
         r = self.render(t, self.test_page4)
         self.assertEqual(r, self.test_data4['no_extra'])
+        cache.clear()
         with SettingsOverride(CMS_PLACEHOLDER_CONF=self.test_data4['placeholderconf']):
             r = self.render(t, self.test_page4)
         self.assertEqual(r, self.test_data4['extra'])
@@ -222,6 +223,7 @@ class RenderingTestCase(SettingsOverrideTestCase):
         t = u'{% load cms_tags %}{% show_uncached_placeholder "extra_context" ' + str(self.test_page4.pk) + ' %}'
         r = self.render(t, self.test_page4)
         self.assertEqual(r, self.test_data4['no_extra'])
+        cache.clear()
         with SettingsOverride(CMS_PLACEHOLDER_CONF=self.test_data4['placeholderconf']):
             r = self.render(t, self.test_page4)
             self.assertEqual(r, self.test_data4['extra'])
@@ -273,6 +275,58 @@ class RenderingTestCase(SettingsOverrideTestCase):
         template = u'{% load cms_tags %}{% page_url test_page %}'
         output = self.render(template, self.test_page, {'test_page': self.test_page2})
         self.assertEqual(output, self.test_page2.get_absolute_url())
+
+    def test_page_url_by_page_as(self):
+        template = u'{% load cms_tags %}{% page_url test_page as test_url %}{{ test_url }}'
+        output = self.render(template, self.test_page, {'test_page': self.test_page2})
+        self.assertEqual(output, self.test_page2.get_absolute_url())
+
+    #
+    # To ensure compatible behaviour, test that page_url swallows any
+    # Page.DoesNotExist exceptions when NOT in DEBUG mode.
+    #
+    def test_page_url_on_bogus_page(self):
+        with SettingsOverride(DEBUG=False):
+            template = u'{% load cms_tags %}{% page_url "bogus_page" %}'
+            output = self.render(template, self.test_page, {'test_page': self.test_page2})
+            self.assertEqual(output, '')
+
+    #
+    # To ensure compatible behaviour, test that page_url will raise a
+    # Page.DoesNotExist exception when the page argument does not eval to a
+    # valid page
+    #
+    def test_page_url_on_bogus_page_in_debug(self):
+        from cms.models import Page
+
+        with SettingsOverride(DEBUG=True):
+            template = u'{% load cms_tags %}{% page_url "bogus_page" %}'
+            self.assertRaises(
+                Page.DoesNotExist,
+                self.render,
+                template,
+                self.test_page,
+                {'test_page': self.test_page2}
+            )
+
+    #
+    # In the 'as varname' form, ensure that the tag will always swallow
+    # Page.DoesNotExist exceptions both when DEBUG is False and...
+    #
+    def test_page_url_as_on_bogus_page(self):
+        with SettingsOverride(DEBUG=False):
+            template = u'{% load cms_tags %}{% page_url "bogus_page" as test_url %}{{ test_url }}'
+            output = self.render(template, self.test_page, {'test_page': self.test_page2})
+            self.assertEqual(output, '')
+
+    #
+    # ...when it is True.
+    #
+    def test_page_url_as_on_bogus_page_in_debug(self):
+        with SettingsOverride(DEBUG=True):
+            template = u'{% load cms_tags %}{% page_url "bogus_page" as test_url %}{{ test_url }}'
+            output = self.render(template, self.test_page, {'test_page': self.test_page2})
+            self.assertEqual(output, '')
 
     def test_page_attribute(self):
         """

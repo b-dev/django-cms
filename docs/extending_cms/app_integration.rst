@@ -3,31 +3,37 @@ App Integration
 ###############
 
 It is pretty easy to integrate your own Django applications with django CMS.
-You have 5 ways of integrating your app:
+You have 7 ways of integrating your app:
 
-1. Menus
+1. :ref:`integration_menus`
 
     Statically extend the menu entries
 
-2. Attach Menus
+2. :ref:`integration_attach_menus`
 
     Attach your menu to a page.
 
-3. App-Hooks
+3. :ref:`integration_apphooks`
 
     Attach whole apps with optional menu to a page.
 
-4. Navigation Modifiers
+4. :ref:`integration_modifiers`
 
     Modify the whole menu tree
 
-5. Custom Plugins
+5. :ref:`integration_customplugins`
 
     Display your models / content in cms pages
 
-6. Toolbar
+6. :ref:`integration_toolbar`
 
     Add Entries to the toolbar to add/edit your models
+
+7. :ref:`integration_templates`
+
+    Templatetags and other CMS-provided utilities
+
+.. _integration_menus:
 
 *****
 Menus
@@ -60,34 +66,34 @@ The get_nodes function should return a list of
 :class:`NavigationNode <menus.base.NavigationNode>` instances. A
 :class:`NavigationNode` takes the following arguments:
 
-- title
+- ``title``
 
   What the menu entry should read as
 
-- url,
+- ``url``,
 
   Link if menu entry is clicked.
 
-- id
+- ``id``
 
   A unique id for this menu.
 
-- parent_id=None
+- ``parent_id=None``
 
   If this is a child of another node supply the the id of the parent here.
 
-- parent_namespace=None
+- ``parent_namespace=None``
 
   If the parent node is not from this menu you can give it the parent
   namespace. The namespace is the name of the class. In the above example that
   would be: "TestMenu"
 
-- attr=None
+- ``attr=None``
 
   A dictionary of additional attributes you may want to use in a modifier or
   in the template.
 
-- visible=True
+- ``visible=True``
 
   Whether or not this menu item should be visible.
 
@@ -116,6 +122,7 @@ Complete example::
                     NavigationNode(_("Log out"), reverse(logout), 2, attr={'visible_for_anonymous': False}),
                 ]
 
+.. _integration_attach_menus:
 
 ************
 Attach Menus
@@ -157,6 +164,7 @@ that with the example from above::
 Now you can link this Menu to a page in the 'Advanced' tab of the page
 settings under attached menu.
 
+.. _integration_apphooks:
 
 *********
 App-Hooks
@@ -185,10 +193,9 @@ under "Application". Save the page.
 
 .. warning::
 
-    If you are on a multi-threaded server (mostly all webservers,
-    except the dev-server): Restart the server because the URLs are cached by
-    Django and in a multi-threaded environment we don't know which caches are
-    cleared yet.
+    Whenever you add or remove an apphook, change the slug of a page containing
+    an apphook or the slug if a page which has a descendant with an apphook,
+    you have to restart your server to re-load the URL caches.
     
 .. note::
 
@@ -211,6 +218,14 @@ a urls.py that looks like this::
 
 The ``main_view`` should now be available at ``/hello/world/`` and the
 ``sample_view`` has the url ``/hello/world/sublevel/``.
+
+
+.. note::
+
+    CMS pages **below** the page to which the apphook is attached to, **can** be visible,
+    provided that the apphook urlconf regexps are not too greedy. From a URL resolution
+    perspective, attaching an apphook works in same way than inserting the apphook urlconf
+    in the root urlconf at the same path as the page is attached to.
 
 .. note::
 
@@ -354,7 +369,7 @@ You can reverse namespaced apps similarly and it "knows" in which app instance i
     {% url myapp_namespace:app_main %}
 
 If you want to access the same url but in a different language use the language
-templatetag:
+template tag:
 
 .. code-block:: html+django
 
@@ -385,12 +400,38 @@ Or, if you are rendering a plugin, of the context instance::
 
     class MyPlugin(CMSPluginBase):
         def render(self, context, instance, placeholder):
-            ...
+            # ...
             current_app = resolve(request.path).namespace
             reversed_url = reverse('myapp_namespace:app_main',
                     current_app=current_app)
-            ...
+            # ...
 
+
+Automatically restart server on apphook changes
+-----------------------------------------------
+
+As mentioned above, whenever you add or remove an apphook, change the slug of a
+page containing an apphook or the slug if a page which has a descendant with an
+apphook, you have to restart your server to re-load the URL caches. To allow
+you to automate this process, the django CMS provides a signal
+:obj:`cms.signals.urls_need_reloading` which you can listen on to detect when
+your server needs restarting. When you run ``manage.py runserver`` a restart
+should not be needed.
+
+.. warning::
+
+    This signal does not actually do anything. To get automated server
+    restarting you need to implement logic in your project that gets
+    executed whenever this signal is fired. Because there are many ways of
+    deploying Django applications, there is no way we can provide a generic
+    solution for this problem that will always work.
+
+.. warning::
+
+    The signal is fired **after** a request. If you change something via API
+    you need a request for the signal to fire.
+
+.. _integration_modifiers:
 
 ********************
 Navigation Modifiers
@@ -510,6 +551,9 @@ Here is an example of a built-in modifier that marks all node levels::
     
     menu_pool.register_modifier(Level)
 
+
+.. _integration_customplugins:
+
 **************
 Custom Plugins
 **************
@@ -523,9 +567,81 @@ For a detailed explanation on how to write custom plugins please head over to
 the :doc:`custom_plugins` section.
 
 
-***************
-Further reading
-***************
+.. _integration_toolbar:
+
+*******
+Toolbar
+*******
 
 Your app might also want to integrate in the :doc:`toolbar` to
 provide a more streamlined user experience for your admins.
+
+
+.. _integration_templates:
+
+**********************
+Working with templates
+**********************
+
+Application can reuse cms templates by mixing cms templatetags and normal django
+templating language.
+
+
+static_placeholder
+------------------
+
+Plain :ttag:`placeholder` cannot be used in templates used by external applications,
+use :ttag:`static_placeholder` instead.
+
+.. _page_template:
+
+CMS_TEMPLATE
+------------
+.. versionadded:: 3.0
+
+``CMS_TEMPLATE`` is a context variable available in the context; it contains
+the template path for CMS pages and application using apphooks, and the default
+template (i.e.: the first template in :setting:`CMS_TEMPLATES`) for non-CMS
+managed urls.
+
+This is mostly useful to use it in the ``extends`` templatetag in the application
+templates to get the current page template.
+
+Example: cms template
+
+.. code-block:: html+django
+
+    {% load cms_tags %}
+    <html>
+        <body>
+        {% cms_toolbar %}
+        {% block main %}
+        {% placeholder "main" %}
+        {% endblock main %}
+        </body>
+    </html>
+
+
+Example: application template
+
+.. code-block:: html+django
+
+    {% extends CMS_TEMPLATE %}
+    {% load cms_tags %}
+    {% block main %}
+    {% for item in object_list %}
+        {{ item }}
+    {% endfor %}
+    {% static_placeholder "sidebar" %}
+    {% endblock main %}
+
+``CMS_TEMPLATE`` memorizes the path of the cms template so the application
+template can dynamically import it.
+
+
+render_model
+------------
+.. versionadded:: 3.0
+
+:ttag:`render_model` allows to edit the django models from the frontend by
+reusing the django CMS frontend editor.

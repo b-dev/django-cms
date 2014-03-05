@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
+from cms.compat import get_user_model
 from cms.models import Page
 from cms.test_utils.util.context_managers import (UserLoginContext,
     SettingsOverride)
 from django.conf import settings
-from django.contrib.auth.models import User, AnonymousUser, Permission
+from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.sites.models import Site
+from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.urlresolvers import reverse
 from django.template.context import Context
@@ -26,7 +28,7 @@ URL_CMS_PAGE_ADVANCED_CHANGE = urljoin(URL_CMS_PAGE, "%d/advanced-settings/")
 URL_CMS_PAGE_PERMISSION_CHANGE = urljoin(URL_CMS_PAGE, "%d/permission-settings/")
 URL_CMS_PAGE_CHANGE_LANGUAGE = URL_CMS_PAGE_CHANGE + "?language=%s"
 URL_CMS_PAGE_CHANGE_TEMPLATE = URL_CMS_PAGE_CHANGE + "change_template/"
-URL_CMS_PAGE_PUBLISH = URL_CMS_PAGE_CHANGE + "publish/"
+URL_CMS_PAGE_PUBLISH = URL_CMS_PAGE_CHANGE + "%s/publish/"
 URL_CMS_PAGE_DELETE = urljoin(URL_CMS_PAGE_CHANGE, "delete/")
 URL_CMS_PLUGIN_ADD = urljoin(URL_CMS_PAGE, "add-plugin/")
 URL_CMS_PLUGIN_EDIT = urljoin(URL_CMS_PAGE, "edit-plugin/")
@@ -92,6 +94,7 @@ class BaseCMSTestCase(object):
     def _post_teardown(self):
         # Needed to clean the menu keys cache, see menu.menu_pool.clear()
         menu_pool.clear()
+        cache.clear()
         super(BaseCMSTestCase, self)._post_teardown()
         set_current_user(None)
 
@@ -109,9 +112,19 @@ class BaseCMSTestCase(object):
         Set `permissions` parameter to an iterable of permission codes to add
         custom permissios.
         """
-        user = User(username=username, email=username+'@django-cms.org',
-                    is_staff=is_staff, is_active=is_active, is_superuser=is_superuser)
-        user.set_password(username)
+        User = get_user_model()
+
+        fields = dict(email=username+'@django-cms.org',
+            is_staff=is_staff, is_active=is_active, is_superuser=is_superuser
+        )
+
+        # Check for special case where email is used as username
+        if(get_user_model().USERNAME_FIELD != 'email'):
+            fields[get_user_model().USERNAME_FIELD] = username
+
+        user = User(**fields)
+        
+        user.set_password(getattr(user, get_user_model().USERNAME_FIELD))
         user.save()
         if is_staff and not is_superuser and add_default_permissions:
             user.user_permissions.add(Permission.objects.get(codename='add_text'))
@@ -129,8 +142,15 @@ class BaseCMSTestCase(object):
 
     def get_superuser(self):
         try:
-            admin = User.objects.get(username="admin")
-        except User.DoesNotExist:
+            query = dict()
+
+            if get_user_model().USERNAME_FIELD != "email":
+                query[get_user_model().USERNAME_FIELD]="admin"
+            else:
+                query[get_user_model().USERNAME_FIELD]="admin@django-cms.org"
+            
+            admin = get_user_model().objects.get(**query)
+        except get_user_model().DoesNotExist:
             admin = self._create_user("admin", is_staff=True, is_superuser=True)
         return admin
 
@@ -157,15 +177,15 @@ class BaseCMSTestCase(object):
             'template': 'nav_playground.html',
             'parent': parent_id,
             'site': 1,
+            'pagepermission_set-TOTAL_FORMS': 0,
+            'pagepermission_set-INITIAL_FORMS': 0,
+            'pagepermission_set-MAX_NUM_FORMS': 0,
+            'pagepermission_set-2-TOTAL_FORMS': 0,
+            'pagepermission_set-2-INITIAL_FORMS': 0,
+            'pagepermission_set-2-MAX_NUM_FORMS': 0
         }
         # required only if user haves can_change_permission
-        page_data['pagepermission_set-TOTAL_FORMS'] = 0
-        page_data['pagepermission_set-INITIAL_FORMS'] = 0
-        page_data['pagepermission_set-MAX_NUM_FORMS'] = 0
-        page_data['pagepermission_set-2-TOTAL_FORMS'] = 0
-        page_data['pagepermission_set-2-INITIAL_FORMS'] = 0
-        page_data['pagepermission_set-2-MAX_NUM_FORMS'] = 0
-        self.counter = self.counter + 1
+        self.counter += 1
         return page_data
 
     
@@ -244,10 +264,10 @@ class BaseCMSTestCase(object):
         }
 
         response = self.client.post(URL_CMS_PAGE + "%d/copy-page/" % page.pk, data)
-        self.assertEquals(response.status_code, 200)
+        self.assertEqual(response.status_code, 200)
         # Altered to reflect the new django-js jsonified response messages
         expected = {"status": 200, "content": "ok"}
-        self.assertEquals(json.loads(response.content.decode('utf8')), expected)
+        self.assertEqual(json.loads(response.content.decode('utf8')), expected)
 
         title = page.title_set.all()[0]
         copied_slug = get_available_slug(title)

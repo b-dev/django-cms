@@ -25,7 +25,8 @@ $(document).ready(function () {
 				'add_plugin': '',
 				'edit_plugin': '',
 				'move_plugin': '',
-				'copy_plugin': ''
+				'copy_plugin': '',
+				'delete_plugin': ''
 			}
 		},
 
@@ -111,6 +112,10 @@ $(document).ready(function () {
 				var el = $(e.delegateTarget);
 				var dragitem = $('.cms_draggable-' + el.data('settings').plugin_id);
 				var placeholder_id = that._getId(dragitem.parents('.cms_draggables').last().prevAll('.cms_dragbar').first());
+
+				// if placeholder_id is empty, cancel
+				if(!placeholder_id) return false;
+
 				var data = el.data('settings');
 					data.target = placeholder_id;
 					data.parent= that._getId(dragitem.parent().closest('.cms_draggable'));
@@ -203,6 +208,7 @@ $(document).ready(function () {
 			// adds double click to edit
 			this.container.bind('dblclick', function (e) {
 				e.preventDefault();
+				e.stopPropagation();
 				that.editPlugin(that.options.urls.edit_plugin, that.options.plugin_name, []);
 			});
 
@@ -247,24 +253,32 @@ $(document).ready(function () {
 			var modal = new CMS.Modal({
 				'newPlugin': this.newPlugin || false,
 				'onClose': this.options.onClose || false,
-				'redirectOnClose': this.options.redirectOnClose || false,
+				'redirectOnClose': this.options.redirectOnClose || false
 			});
 			modal.open(url, name, breadcrumb);
 		},
 
-		copyPlugin: function (options) {
+		copyPlugin: function (options, source_language) {
 			var that = this;
-			var move = (options) ? true : false;
+			var move = (options || source_language) ? true : false;
 			// set correct options
 			options = options || this.options;
+			if(source_language) {
+				options.target = options.placeholder_id;
+				options.plugin_id = '';
+				options.parent = '';
+			}
+			else {
+				source_language = options.plugin_language
+			}
 
 			var data = {
 				'source_placeholder_id': options.placeholder_id,
 				'source_plugin_id': options.plugin_id || '',
-				'source_language': options.plugin_language,
+				'source_language': source_language,
 				'target_plugin_id': options.parent || '',
 				'target_placeholder_id': options.target || CMS.config.clipboard.id,
-				'target_language': options.plugin_language,
+				'target_language': options.page_language || source_language,
 				'csrfmiddlewaretoken': this.csrf
 			};
 			var request = {
@@ -386,6 +400,16 @@ $(document).ready(function () {
 			$('.cms_btn-publish').addClass('cms_btn-publish-active').parent().show();
 		},
 
+		deletePlugin: function (url, name, breadcrumb) {
+			// trigger modal window
+			var modal = new CMS.Modal({
+				'newPlugin': this.newPlugin || false,
+				'onClose': this.options.onClose || false,
+				'redirectOnClose': this.options.redirectOnClose || false
+			});
+			modal.open(url, name, breadcrumb);
+		},
+
 		// private methods
 		_setSubnav: function (nav) {
 			var that = this;
@@ -414,11 +438,17 @@ $(document).ready(function () {
 					case 'edit':
 						that.editPlugin(that.options.urls.edit_plugin, that.options.plugin_name, that.options.plugin_breadcrumb);
 						break;
+					case 'copy-lang':
+						that.copyPlugin(this.options, el.attr('data-language'));
+						break;
 					case 'copy':
 						that.copyPlugin();
 						break;
 					case 'cut':
 						that.cutPlugin();
+						break;
+					case 'delete':
+						that.deletePlugin(that.options.urls.delete_plugin, that.options.plugin_name, that.options.plugin_breadcrumb);
 						break;
 					default:
 						CMS.API.Toolbar._loader(false);
@@ -464,7 +494,9 @@ $(document).ready(function () {
 			this.timer = setTimeout(function () {
 				// reset z indexes
 				var reset = $('.cms_submenu').parentsUntil('.cms_dragarea');
-					reset.css('z-index', 0);
+				var scrollHint = nav.find('.cms_submenu-scroll-hint');
+
+				reset.css('z-index', 0);
 
 				var parents = nav.parentsUntil('.cms_dragarea');
 					parents.css('z-index', 999);
@@ -473,7 +505,14 @@ $(document).ready(function () {
 				nav.find('.cms_submenu-quicksearch').show();
 
 				// set visible states
-				nav.find('> .cms_submenu-dropdown').show();
+				nav.find('> .cms_submenu-dropdown').show().on('scroll', function () {
+					scrollHint.fadeOut(100);
+					$(this).off('scroll');
+				});
+
+				// show scrollHint for FF on OSX
+				if(nav[0].scrollHeight > 230) scrollHint.show();
+
 			}, 100);
 
 			// add key events
@@ -514,7 +553,9 @@ $(document).ready(function () {
 			// calculate subnav bounds
 			if($(window).height() + $(window).scrollTop() - nav.offset().top - dropdown.height() <= 10) {
 				dropdown.css('top', 'auto');
-				dropdown.css('bottom', offset - 1);
+				dropdown.css('bottom', offset);
+				// if parent is within a plugin, add additional offset
+				if(dropdown.closest('.cms_draggable').length) dropdown.css('bottom', offset - 1);
 			} else {
 				dropdown.css('top', offset);
 				dropdown.css('bottom', 'auto');

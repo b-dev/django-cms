@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 import bisect
-from collections import defaultdict
-from cms.exceptions import NoHomeFound
-from cms.models import Title, Page, PageModeratorState
+from cms.models import Title, Page, EmptyTitle
+from cms.utils import get_language_list
 from cms.utils.compat import DJANGO_1_5
 from cms.utils.conf import get_cms_setting
 from cms.utils.permissions import get_user_sites_queryset
-from django.conf import settings
 from django.contrib.admin.views.main import ChangeList, ALL_VAR, IS_POPUP_VAR, \
     ORDER_TYPE_VAR, ORDER_VAR, SEARCH_VAR
 from django.contrib.sites.models import Site
@@ -64,6 +62,10 @@ class CMSChangeList(ChangeList):
     def get_query_set(self, request=None):
         if COPY_VAR in self.params:
             del self.params[COPY_VAR]
+        if 'language' in self.params:
+            del self.params['language']
+        if 'page_id' in self.params:
+            del self.params['page_id']
         if django.VERSION[1] > 3:
             qs = super(CMSChangeList, self).get_query_set(request).drafts()
         else:
@@ -84,7 +86,7 @@ class CMSChangeList(ChangeList):
     def is_filtered(self):
         from cms.utils.plugins import SITE_VAR
         lookup_params = self.params.copy() # a dictionary of the query string
-        for i in (ALL_VAR, ORDER_VAR, ORDER_TYPE_VAR, SEARCH_VAR, IS_POPUP_VAR, SITE_VAR):
+        for i in (ALL_VAR, ORDER_VAR, ORDER_TYPE_VAR, SEARCH_VAR, IS_POPUP_VAR, SITE_VAR, 'language', 'page_id'):
             if i in lookup_params:
                 del lookup_params[i]
         if not lookup_params.items() and not self.query:
@@ -103,31 +105,21 @@ class CMSChangeList(ChangeList):
         site = self.current_site()
         # Get all the pages, ordered by tree ID (it's convenient to build the
         # tree using a stack now)
-        pages = self.get_query_set(request).drafts().order_by('tree_id',  'lft').select_related()
-
+        pages = self.get_query_set(request).drafts().order_by('tree_id',  'lft').select_related('publisher_public')
 
         # Get lists of page IDs for which the current user has
         # "permission to..." on the current site.
-        perm_edit_ids = Page.permissions.get_change_id_list(request.user, site)
-        perm_publish_ids = Page.permissions.get_publish_id_list(request.user, site)
-        perm_advanced_settings_ids = Page.permissions.get_advanced_settings_id_list(request.user, site)
-        perm_change_list_ids = Page.permissions.get_change_id_list(request.user, site)
-
-        if perm_edit_ids and perm_edit_ids != Page.permissions.GRANT_ALL:
-            pages = pages.filter(pk__in=perm_edit_ids)
+        if get_cms_setting('PERMISSION'):
+            perm_edit_ids = Page.permissions.get_change_id_list(request.user, site)
+            perm_publish_ids = Page.permissions.get_publish_id_list(request.user, site)
+            perm_advanced_settings_ids = Page.permissions.get_advanced_settings_id_list(request.user, site)
+            restricted_ids = Page.permissions.get_restricted_id_list(site)
+            if perm_edit_ids and perm_edit_ids != Page.permissions.GRANT_ALL:
+                pages = pages.filter(pk__in=perm_edit_ids)
 
         root_pages = []
         pages = list(pages)
         all_pages = pages[:] # That is, basically, a copy.
-
-        # page moderator states
-        pm_qs = PageModeratorState.objects.filter(page__in=pages).order_by('page')
-        pm_states = defaultdict(list)
-        for state in pm_qs:
-            pm_states[state.page_id].append(state)
-
-        public_page_id_set = Page.objects.public().filter(
-            published=True, publisher_public__in=pages).values_list('id', flat=True)
 
         # Unfortunately we cannot use the MPTT builtin code for pre-caching
         # the children here, because MPTT expects the tree to be 'complete'
@@ -150,9 +142,7 @@ class CMSChangeList(ChangeList):
                 page.permission_publish_cache = perm_publish_ids == Page.permissions.GRANT_ALL or page.pk in perm_publish_ids
                 page.permission_advanced_settings_cache = perm_advanced_settings_ids == Page.permissions.GRANT_ALL or page.pk in perm_advanced_settings_ids
                 page.permission_user_cache = request.user
-
-            page._moderator_state_cache = pm_states[page.pk]
-            page._public_published_cache = page.publisher_public_id in public_page_id_set
+                page.permission_restricted = page.pk in restricted_ids
             if page.root_node or self.is_filtered():
                 page.last = True
                 if len(children):
@@ -185,6 +175,10 @@ class CMSChangeList(ChangeList):
         for page in all_pages:
             page.title_cache = {}
             page.all_languages = []
+            if page.publisher_public_id:
+                page.publisher_public.title_cache = {}
+                page.publisher_public.all_languages = []
+                ids[page.publisher_public_id] = page.publisher_public
 
         titles = Title.objects.filter(page__in=ids)
         insort = bisect.insort # local copy to avoid globals lookup in the loop
@@ -193,6 +187,12 @@ class CMSChangeList(ChangeList):
             page.title_cache[title.language] = title
             if not title.language in page.all_languages:
                 insort(page.all_languages, title.language)
+        site_id = self.current_site()
+        languages = get_language_list(site_id)
+        for page in all_pages:
+            for lang in languages:
+                if not lang in page.title_cache:
+                    page.title_cache[lang] = EmptyTitle(lang)
         self.root_pages = root_pages
 
     def get_items(self):

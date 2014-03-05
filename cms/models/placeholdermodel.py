@@ -1,19 +1,34 @@
 # -*- coding: utf-8 -*-
-from cms.utils.compat.dj import python_2_unicode_compatible
-from cms.utils.helpers import reversion_register
-from cms.utils.placeholder import PlaceholderNoAction, get_placeholder_conf
+import operator
+
+try:
+    reduce
+except NameError:
+    from functools import reduce
+
 from django.core.urlresolvers import reverse
 from django.db import models
 from django.forms.widgets import Media
 from django.template.defaultfilters import title
-from django.utils.translation import ugettext_lazy as _, get_language
-import operator
+from django.utils.encoding import force_text
+from django.utils.timezone import get_current_timezone_name
+from django.utils.translation import ugettext_lazy as _
+from django.conf import settings
+from django.contrib import admin
+
+from cms.exceptions import LanguageError
+from cms.utils import get_cms_setting
+from cms.utils.compat.dj import python_2_unicode_compatible
+from cms.utils.helpers import reversion_register
+from cms.utils.i18n import get_language_object
+from cms.utils.placeholder import PlaceholderNoAction, get_placeholder_conf
 
 
 @python_2_unicode_compatible
 class Placeholder(models.Model):
     slot = models.CharField(_("slot"), max_length=50, db_index=True, editable=False)
     default_width = models.PositiveSmallIntegerField(_("width"), null=True, editable=False)
+    cache_placeholder = True
 
     class Meta:
         app_label = 'cms'
@@ -46,6 +61,13 @@ class Placeholder(models.Model):
 
     def get_copy_url(self):
         return self._get_url('copy_plugins')
+
+    def get_cache_key(self, lang):
+        cache_key = '%srender_placeholder:%s.%s' % (get_cms_setting("CACHE_PREFIX"), self.pk, str(lang))
+        if settings.USE_TZ:
+            tz_name = force_text(get_current_timezone_name(), errors='ignore')
+            cache_key += '.%s' % tz_name.encode('ascii', 'ignore').decode('ascii').replace(' ', '_')
+        return cache_key
 
     def _get_url(self, key, pk=None):
         model = self._get_attached_model()
@@ -100,7 +122,7 @@ class Placeholder(models.Model):
         return render_placeholder(self, context, lang=lang)
 
     def get_media(self, request, context):
-        from cms.plugins.utils import get_plugin_media
+        from cms.utils.plugins import get_plugin_media
         media_classes = [get_plugin_media(request, context, plugin) for plugin in self.get_plugins()]
         if media_classes:
             return reduce(operator.add, media_classes)
@@ -111,23 +133,36 @@ class Placeholder(models.Model):
         Returns an ITERATOR of all non-cmsplugin reverse foreign key related fields.
         """
         from cms.models import CMSPlugin
-        for rel in self._meta.get_all_related_objects():
-            if issubclass(rel.model, CMSPlugin):
-                continue
-            field = getattr(self, rel.get_accessor_name())
-            if field.count():
-                yield rel.field
-
-    def _get_attached_field(self):
-        from cms.models import CMSPlugin
-        if not hasattr(self, '_attached_field_cache'):
-            self._attached_field_cache = None
+        if not hasattr(self, '_attached_fields_cache'):
+            self._attached_fields_cache = []
             for rel in self._meta.get_all_related_objects():
                 if issubclass(rel.model, CMSPlugin):
                     continue
-                field = getattr(self, rel.get_accessor_name())
-                if field.count():
-                    self._attached_field_cache = rel.field
+                from cms.admin.placeholderadmin import PlaceholderAdminMixin
+                if rel.model in admin.site._registry and isinstance(admin.site._registry[rel.model], PlaceholderAdminMixin):
+                    field = getattr(self, rel.get_accessor_name())
+                    if field.count():
+                        self._attached_fields_cache.append(rel.field)
+        return self._attached_fields_cache
+
+    def _get_attached_field(self):
+        from cms.models import CMSPlugin, StaticPlaceholder, Page
+        if not hasattr(self, '_attached_field_cache'):
+            self._attached_field_cache = None
+            relations = self._meta.get_all_related_objects()
+
+            for rel in relations:
+                if rel.model == Page or rel.model == StaticPlaceholder:
+                    relations.insert(0, relations.pop(relations.index(rel)))
+            for rel in relations:
+                if issubclass(rel.model, CMSPlugin):
+                    continue
+                from cms.admin.placeholderadmin import PlaceholderAdminMixin
+                if rel.model in admin.site._registry and isinstance(admin.site._registry[rel.model], PlaceholderAdminMixin):
+                    field = getattr(self, rel.get_accessor_name())
+                    if field.count():
+                        self._attached_field_cache = rel.field
+                        break
         return self._attached_field_cache
 
     def _get_attached_field_name(self):
@@ -137,16 +172,27 @@ class Placeholder(models.Model):
         return None
 
     def _get_attached_model(self):
+        if hasattr(self, '_attached_model_cache'):
+            return self._attached_model_cache
+        if self.page or self.page_set.all().count():
+            from cms.models import Page
+            self._attached_model_cache = Page
+            return Page
         field = self._get_attached_field()
         if field:
+            self._attached_model_cache = field.model
             return field.model
+        self._attached_model_cache = None
         return None
 
     def _get_attached_models(self):
         """
         Returns a list of models of attached to this placeholder.
         """
-        return [field.model for field in self._get_attached_fields()]
+        if hasattr(self, '_attached_models_cache'):
+            return self._attached_models_cache
+        self._attached_models_cache = [field.model for field in self._get_attached_fields()]
+        return self._attached_models_cache
 
     def _get_attached_objects(self):
         """
@@ -169,11 +215,29 @@ class Placeholder(models.Model):
 
     page = property(page_getter, page_setter)
 
-    def get_plugins_list(self):
-        return list(self.get_plugins())
+    def get_plugins_list(self, language=None):
+        return list(self.get_plugins(language))
 
-    def get_plugins(self):
-        return self.cmsplugin_set.all().order_by('tree_id', 'lft')
+    def get_plugins(self, language=None):
+        if language:
+            return self.cmsplugin_set.filter(language=language).order_by('tree_id', 'lft')
+        else:
+            return self.cmsplugin_set.all().order_by('tree_id', 'lft')
+
+    def get_filled_languages(self):
+        """
+        Returns language objects for every language for which the placeholder
+        has plugins.
+
+        This is not cached as it's meant to eb used in the frontend editor.
+        """
+        languages = []
+        for lang_code in set(self.get_plugins().values_list('language', flat=True)):
+            try:
+                languages.append(get_language_object(lang_code))
+            except LanguageError:
+                pass
+        return languages
 
     def get_cached_plugins(self):
         return getattr(self, '_plugins_cache', [])

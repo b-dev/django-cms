@@ -1,7 +1,7 @@
 from cms.apphook_pool import apphook_pool
 from cms.views import details
 from django.conf import settings
-from django.conf.urls import url, patterns
+from django.conf.urls import url, patterns, include
 
 if settings.APPEND_SLASH:
     reg = url(r'^(?P<slug>[0-9A-Za-z-_.//]+)/$', details, name='pages-details-by-slug')
@@ -22,3 +22,10 @@ if apphook_pool.get_apphooks():
     urlpatterns = get_app_patterns() + urlpatterns
     
 urlpatterns = patterns('', *urlpatterns)
+
+
+if settings.DEBUG and 'debug_toolbar' in settings.INSTALLED_APPS:
+    import debug_toolbar
+    urlpatterns += patterns('',
+        url(r'^__debug__/', include(debug_toolbar.urls)),
+    )

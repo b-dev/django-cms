@@ -454,6 +454,16 @@ A **bad** example:
 .. _plugin-context-processors:
 
 
+Plugin Context
+==============
+
+The plugin has access to the django template context. You can override variables using the ``with`` tag.
+
+Example::
+
+    {% with 320 as width %}{% placeholder "content" %}{% endwith %}
+
+
 Plugin Context Processors
 =========================
 
@@ -544,6 +554,71 @@ In your ``yourapp.cms_plugin_processors.py``::
 .. _Django admin documentation: http://docs.djangoproject.com/en/1.2/ref/contrib/admin/
 .. _django-sekizai: https://github.com/ojii/django-sekizai
 .. _django-sekizai documentation: http://django-sekizai.readthedocs.org
+
+
+Nested Plugins
+==============
+
+You can nest CMS Plugins in themselves. There's a few things required to achieve this functionality:
+
+`models.py`::
+
+    class ParentPlugin(CMSPlugin):
+        # add your fields here
+
+    class ChildPlugin(CMSPlugin):
+        # add your fields here
+
+`cms_plugins.py`::
+
+    from .models import ParentPlugin, ChildPlugin
+
+    class ParentCMSPlugin(CMSPluginBase):
+        render_template = 'parent.html'
+        name = 'Parent'
+        model = ParentPlugin
+        allow_children = True  # This enables the parent plugin to accept child plugins
+        # child_classes = ['ChildCMSPlugin']  # You can also specify a list of plugins that are accepted as children,
+                                                or leave it away completely to accept all
+
+        def render(self, context, instance, placeholder):
+            context['instance'] = instance
+            return context
+
+    plugin_pool.register_plugin(ParentCMSPlugin)
+
+
+    class ChildCMSPlugin(CMSPluginBase):
+        render_template = 'child.html'
+        name = 'Child'
+        model = ChildPlugin
+        require_parent = True  # Is it required that this plugin is a child of another plugin?
+        # parent_classes = ['ParentCMSPlugin']  # You can also specify a list of plugins that are accepted as parents,
+                                                or leave it away completely to accept all
+
+        def render(self, context, instance, placeholder):
+            context['instance'] = instance
+            return context
+
+    plugin_pool.register_plugin(ChildCMSPlugin)
+
+
+`parent.html`::
+
+    {% load cms_tags %}
+
+    <div class="plugin parent">
+        {% for plugin in instance.child_plugin_instances %}
+            {% render_plugin plugin %}
+        {% endfor %}
+    </div>
+
+
+`child.html`::
+
+    <div class="plugin child">
+        {{ instance }}
+    </div>
 
 
 Plugin Attribute Reference
@@ -637,6 +712,21 @@ allow_children
 Default: False
 
 Can this plugin have child plugins? Or can other plugins be placed inside this plugin?
+If set to True you are responsible to render the children in your plugin template.
+
+Please use something like this or something similar::
+
+    {% load cms_tags %}
+    <div class="myplugin">
+    {{ instance.my_content }}
+    {% for plugin in instance.child_plugin_instances %}
+         {% render_plugin plugin %}
+    {% endfor %}
+    </div>
+
+
+Be sure to access ``instance.child_plugin_instances`` to get all children. They are pre-filled
+and ready to use. To finally render your child plugins use the ``{% render_plugin %}`` templatetag.
 
 
 child_classes
@@ -660,6 +750,14 @@ require_parent
 Default: False
 
 Is it required that this plugin is a child of another plugin? Or can it be added to any placeholder, even one attached to a page.
+
+
+disable_child_plugin
+--------------------
+
+Default: False
+
+Disables dragging of child plugins in structure mode.
 
 
 get_translatable_content
@@ -697,3 +795,12 @@ translatable_content_excluded_fields
 Default: [ ]
 
 A list of plugin fields which will not be exported while using :meth:`get_translatable_content`
+
+
+cache
+-----
+
+Default: :setting:`CMS_PLUGIN_CACHE`
+
+Is this plugin cacheable? If your plugin displays content based on the user or request or other
+dynamic properties set this to False.

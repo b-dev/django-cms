@@ -9,16 +9,40 @@ Frontend editing for Page and Django models
 django CMS frontend editing can also be used to edit non-placeholder fields from
 the frontend, both for pages and your standard Django models.
 
-By enabling it, it's possible to double click on a value of a model instance in
+Using this interface, you can double click on a value of a model instance in
 the frontend and access the instance changeform in a popup window, like the page
 changeform.
 
 
 .. warning::
 
-    ``show_editable_model`` marks as safe the content of the rendered model
-    attribute. This may be a security risk if used on fields which may hold
-    non-trusted content. Be aware, and use the templatetag accordingly.
+    Templatetag used by this feature mark as safe the content of the rendered
+    model attribute. This may be a security risk if used on fields which may
+    hold non-trusted content. Be aware, and use the templatetags accordingly.
+
+
+.. warning::
+
+    This feature is only partially compatible with django-hvad: using
+    ``render_model`` with hvad-translated fields (say
+    {% render_model object 'translated_field' %} return error if the
+    hvad-enabled object does not exists in the current language.
+    As a workaround ``render_model_icon`` can be used instead.
+
+************
+Templatetags
+************
+
+This feature relies on four templatetag sharing common code:
+
+* :ttag:`render_model`
+* :ttag:`render_model_icon`
+* :ttag:`render_model_add`
+* :ttag:`render_model_block`
+
+Look at the tag-specific page for a detailed reference; in the examples
+below ``render_model`` is assumed.
+
 
 ****************
 Page titles edit
@@ -29,28 +53,64 @@ attribute specified a overridable default field will be editable.
 
 Main title::
 
-    {% show_editable_model request.current_page "title" %}
+    {% render_model request.current_page "title" %}
 
 
 Page title::
 
-    {% show_editable_model request.current_page "page_title" %}
+    {% render_model request.current_page "page_title" %}
 
 Menu title::
 
-    {% show_editable_model request.current_page "menu_title" %}
+    {% render_model request.current_page "menu_title" %}
 
 All three titles::
 
-    {% show_editable_model request.current_page "titles" %}
+    {% render_model request.current_page "titles" %}
 
 
 You can always customize the editable fields by providing the
 `edit_field` parameter::
 
-    {% show_editable_model request.current_page "title" "page_title,menu_title" %}
+    {% render_model request.current_page "title" "page_title,menu_title" %}
 
 
+**************
+Page menu edit
+**************
+
+By using the special keyword ``changelist`` as edit field the frontend
+editing will show the page tree; a common pattern for this is to enable
+changes in the menu by wrapping the menu templatetags:
+
+.. code-block:: html+django
+
+    {% render_model_block request.current_page "changelist" %}
+        <h3>Menu</h3>
+        <ul>
+            {% show_menu 1 100 0 1 "sidebar_submenu_root.html" %}
+        </ul>
+    {% endrender_model_block %}
+
+Will render to:
+
+.. code-block:: html+django
+
+    <div class="cms_plugin cms_plugin-cms-page-changelist-1">
+        <h3>Menu</h3>
+        <ul>
+            <li><a href="/">Home</a></li>
+            <li><a href="/another">another</a></li>
+            [...]
+    </div>
+    
+.. warning:
+    
+    Be aware that depending on the layout of your menu templates, clickable
+    area of the menu may completely overlap with the active area of the
+    frontend editor thus preventing editing. In this case you may use
+    ``{% render_model_icon %}``.
+    The same conflict exists when menu template is managed by a plugin.
 
 ******************
 Django models edit
@@ -62,27 +122,27 @@ and the resulting forms.
 Complete changeform edit
 ========================
 
-You need to properly setup your admin class by adding the
-``FrontendEditableAdmin`` mixin to the parents of your admin class (see
+You need to properly setup your admin class by adding the ``FrontendEditableAdminMixin``
+mixin to the parents of your admin class (see
 :mod:`Django admin documentation <django.contrib.admin>` for further information)
 on Django admin::
 
-    from cms.admin.placeholderadmin import FrontendEditableAdmin
+    from cms.admin.placeholderadmin import FrontendEditableAdminMixin
     from django.contrib import admin
 
 
-    class MyModelAdmin(FrontendEditableAdmin, admin.ModelAdmin):
+    class MyModelAdmin(FrontendEditableAdminMixin, admin.ModelAdmin):
         ...
 
-Then setup the templates adding ``show_editable_model`` templatetag::
+Then setup the templates adding ``render_model`` templatetag::
 
     {% load cms_tags %}
 
     {% block content %}
-    <h1>{% show_editable_model instance "some_attribute" %}</h1>
+    <h1>{% render_model instance "some_attribute" %}</h1>
     {% endblock content %}
 
-See :ttag:`templatetag reference <show_editable_model>` for arguments documentation.
+See :ttag:`templatetag reference <render_model>` for arguments documentation.
 
 
 Selected fields edit
@@ -96,11 +156,11 @@ Set up the admin
 You need to add to your model admin a tuple of fields editable from the frontend
 admin::
 
-    from cms.admin.placeholderadmin import FrontendEditableAdmin
+    from cms.admin.placeholderadmin import FrontendEditableAdminMixin
     from django.contrib import admin
 
 
-    class MyModelAdmin(FrontendEditableAdmin, admin.ModelAdmin):
+    class MyModelAdmin(FrontendEditableAdminMixin, admin.ModelAdmin):
         frontend_editable_fields = ("foo", "bar")
         ...
 
@@ -113,7 +173,7 @@ the templatetag::
     {% load cms_tags %}
 
     {% block content %}
-    <h1>{% show_editable_model instance "some_attribute" "some_field,other_field" %}</h1>
+    <h1>{% render_model instance "some_attribute" "some_field,other_field" %}</h1>
     {% endblock content %}
 
 
@@ -143,14 +203,14 @@ evaluated with ``request`` as parameter.
 The custom view does not need to obey any specific interface; it will get
 ``edit_fields`` value as a ``GET`` parameter.
 
-See :ttag:`templatetag reference <show_editable_model>` for arguments documentation.
+See :ttag:`templatetag reference <render_model>` for arguments documentation.
 
 Example ``view_url``::
 
     {% load cms_tags %}
 
     {% block content %}
-    <h1>{% show_editable_model instance "some_attribute" "some_field,other_field" "" "admin:exampleapp_example1_some_view" %}</h1>
+    <h1>{% render_model instance "some_attribute" "some_field,other_field" "" "admin:exampleapp_example1_some_view" %}</h1>
     {% endblock content %}
 
 
@@ -166,8 +226,27 @@ Example ``view_method``::
     {% load cms_tags %}
 
     {% block content %}
-    <h1>{% show_editable_model instance "some_attribute" "some_field,other_field" "" "" "some_method" %}</h1>
+    <h1>{% render_model instance "some_attribute" "some_field,other_field" "" "" "some_method" %}</h1>
     {% endblock content %}
+
+
+Model changelist
+================
+
+By using the special keyword ``changelist`` as edit field the frontend
+editing will show the model changelist:
+
+.. code-block:: html+django
+
+    {% render_model instance "name" "changelist" %}
+
+Will render to:
+
+.. code-block:: html+django
+
+    <div class="cms_plugin cms_plugin-myapp-mymodel-changelist-1">
+        My Model Instance Name
+    </div>
 
 
 .. filters:
@@ -177,11 +256,33 @@ Filters
 *******
 
 If you need to apply filters to the output value of the templatetag, add quoted
-sequence of filters as in Django :ttag:`django:filter` templatetag::
+sequence of filters as in Django :ttag:`django:filter` templatetag:
+
+.. code-block:: html+django
 
     {% load cms_tags %}
 
     {% block content %}
-    <h1>{% show_editable_model instance "attribute" "" "" "truncatechars:9" %}</h1>
+    <h1>{% render_model instance "attribute" "" "" "truncatechars:9" %}</h1>
+    {% endblock content %}
+
+
+
+****************
+Context variable
+****************
+
+The templatetag output can be saved in a context variable for later use, using
+the standard `as` syntax:
+
+.. code-block:: html+django
+
+    {% load cms_tags %}
+
+    {% block content %}
+    {% render_model instance "attribute" as variable %}
+
+    <h1>{{ variable }}</h1>
+
     {% endblock content %}
 

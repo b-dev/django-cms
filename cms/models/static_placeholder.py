@@ -24,7 +24,7 @@ class StaticPlaceholder(models.Model):
     CREATION_BY_CODE = 'code'
     CREATION_METHODS = (
         (CREATION_BY_TEMPLATE, _('by template')),
-        (CREATION_BY_TEMPLATE, _('by code')),
+        (CREATION_BY_CODE, _('by code')),
     )
     name = models.CharField(
         verbose_name=_(u'static placeholder name'), max_length=255, blank=True, default='',
@@ -53,10 +53,10 @@ class StaticPlaceholder(models.Model):
         if not self.code:
             self.code = u'static-%s' % uuid.uuid4()
 
-    def publish(self, request, force=False):
+    def publish(self, request, language, force=False):
         if force or self.has_publish_permission(request):
-            CMSPlugin.objects.filter(placeholder=self.public).delete()
-            plugins = self.draft.get_plugins_list()
+            CMSPlugin.objects.filter(placeholder=self.public, language=language).delete()
+            plugins = self.draft.get_plugins_list(language=language)
             copy_plugins_to(plugins, self.public)
             self.dirty = False
             self.save()

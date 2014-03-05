@@ -1,11 +1,10 @@
 import abc
 import json
-from collections import defaultdict, namedtuple
+from collections import defaultdict
 from cms.utils.compat.dj import force_unicode
 from cms.constants import RIGHT, LEFT, REFRESH_PAGE, URL_CHANGE
 from django.template.loader import render_to_string
 from django.utils.functional import Promise
-
 
 
 class ItemSearchResult(object):
@@ -94,55 +93,83 @@ class ToolbarAPIMixin(object):
         except IndexError:
             return None
 
+    #
+    # This will only work if it is used to determine the insert position for
+    # all items in the same menu.
+    #
+    def get_alphabetical_insert_position(self, new_menu_name, item_type,
+                                         default=0):
+        results = self.find_items(item_type)
+
+        # No items yet? Use the default value provided
+        if not len(results):
+            return default
+
+        last_position = 0
+
+        for result in sorted(results, key=lambda x: x.item.name):
+            if result.item.name > new_menu_name:
+                return result.index
+
+            if result.index > last_position:
+                last_position = result.index
+        else:
+            return last_position + 1
+
     def remove_item(self, item):
         self._remove_item(item)
         self._unmemoize(item)
 
-    def add_sideframe_item(self, name, url, active=False, disabled=False, extra_classes=None, close_on_url=None,
-                 on_close=None, side=LEFT, position=None):
+    def add_sideframe_item(self, name, url, active=False, disabled=False,
+                           extra_classes=None, close_on_url=None,
+                           on_close=None, side=LEFT, position=None):
         item = SideframeItem(name, url,
-            active=active,
-            disabled=disabled,
-            extra_classes=extra_classes,
-            close_on_url=close_on_url,
-            on_close=on_close,
-            side=side,
+                             active=active,
+                             disabled=disabled,
+                             extra_classes=extra_classes,
+                             close_on_url=close_on_url,
+                             on_close=on_close,
+                             side=side,
         )
         self.add_item(item, position=position)
         return item
 
-    def add_modal_item(self, name, url, active=False, disabled=False, extra_classes=None, close_on_url=URL_CHANGE,
-                 on_close=REFRESH_PAGE, side=LEFT, position=None):
+    def add_modal_item(self, name, url, active=False, disabled=False,
+                       extra_classes=None, close_on_url=URL_CHANGE,
+                       on_close=REFRESH_PAGE, side=LEFT, position=None):
         item = ModalItem(name, url,
-            active=active,
-            disabled=disabled,
-            extra_classes=extra_classes,
-            close_on_url=close_on_url,
-            on_close=on_close,
-            side=side,
+                         active=active,
+                         disabled=disabled,
+                         extra_classes=extra_classes,
+                         close_on_url=close_on_url,
+                         on_close=on_close,
+                         side=side,
         )
         self.add_item(item, position=position)
         return item
 
-    def add_link_item(self, name, url, active=False, disabled=False, extra_classes=None, side=LEFT, position=None):
+    def add_link_item(self, name, url, active=False, disabled=False,
+                      extra_classes=None, side=LEFT, position=None):
         item = LinkItem(name, url,
-            active=active,
-            disabled=disabled,
-            extra_classes=extra_classes,
-            side=side
+                        active=active,
+                        disabled=disabled,
+                        extra_classes=extra_classes,
+                        side=side
         )
         self.add_item(item, position=position)
         return item
 
-    def add_ajax_item(self, name, action, active=False, disabled=False, extra_classes=None, data=None, question=None,
-                      side=LEFT, position=None):
+    def add_ajax_item(self, name, action, active=False, disabled=False,
+                      extra_classes=None, data=None, question=None,
+                      side=LEFT, position=None, on_success=None):
         item = AjaxItem(name, action, self.csrf_token,
-            active=active,
-            disabled=disabled,
-            extra_classes=extra_classes,
-            data=data,
-            question=question,
-            side=side,
+                        active=active,
+                        disabled=disabled,
+                        extra_classes=extra_classes,
+                        data=data,
+                        question=question,
+                        side=side,
+                        on_success=on_success,
         )
         self.add_item(item, position=position)
         return item
@@ -222,7 +249,8 @@ class Menu(SubMenu):
 class LinkItem(BaseItem):
     template = "cms/toolbar/items/item_link.html"
 
-    def __init__(self, name, url, active=False, disabled=False, extra_classes=None, side=LEFT):
+    def __init__(self, name, url, active=False, disabled=False,
+                 extra_classes=None, side=LEFT):
         super(LinkItem, self).__init__(side)
         self.name = name
         self.url = url
@@ -246,7 +274,8 @@ class LinkItem(BaseItem):
 class SideframeItem(BaseItem):
     template = "cms/toolbar/items/item_sideframe.html"
 
-    def __init__(self, name, url, active=False, disabled=False, extra_classes=None, close_on_url=None,
+    def __init__(self, name, url, active=False, disabled=False,
+                 extra_classes=None, close_on_url=None,
                  on_close=None, side=LEFT):
         super(SideframeItem, self).__init__(side)
         self.name = "%s ..." % force_unicode(name)
@@ -275,8 +304,9 @@ class SideframeItem(BaseItem):
 class AjaxItem(BaseItem):
     template = "cms/toolbar/items/item_ajax.html"
 
-    def __init__(self, name, action, csrf_token, data=None, active=False, disabled=False, extra_classes=None,
-                 question=None, side=LEFT):
+    def __init__(self, name, action, csrf_token, data=None, active=False,
+                 disabled=False, extra_classes=None,
+                 question=None, side=LEFT, on_success=None):
         super(AjaxItem, self).__init__(side)
         self.name = name
         self.action = action
@@ -286,6 +316,7 @@ class AjaxItem(BaseItem):
         self.data = data or {}
         self.extra_classes = extra_classes or []
         self.question = question
+        self.on_success = on_success
 
     def __repr__(self):
         return '<AjaxItem:%s>' % force_unicode(self.name)
@@ -302,14 +333,16 @@ class AjaxItem(BaseItem):
             'disabled': self.disabled,
             'extra_classes': self.extra_classes,
             'data': data,
-            'question': self.question
+            'question': self.question,
+            'on_success': self.on_success
         }
 
 
 class ModalItem(BaseItem):
     template = "cms/toolbar/items/item_modal.html"
 
-    def __init__(self, name, url, active=False, disabled=False, extra_classes=None, close_on_url=URL_CHANGE,
+    def __init__(self, name, url, active=False, disabled=False,
+                 extra_classes=None, close_on_url=URL_CHANGE,
                  on_close=None, side=LEFT):
         super(ModalItem, self).__init__(side)
         self.name = "%s ..." % force_unicode(name)
@@ -343,7 +376,8 @@ class Break(BaseItem):
 
 
 class Button(object):
-    def __init__(self, name, url, active=False, disabled=False, extra_classes=None):
+    def __init__(self, name, url, active=False, disabled=False,
+                 extra_classes=None):
         self.name = name
         self.url = url
         self.active = active
@@ -371,11 +405,12 @@ class ButtonList(BaseItem):
             raise ValueError("Expected instance of cms.toolbar.items.Button, got %r instead" % item)
         self.buttons.append(item)
 
-    def add_button(self, name, url, active=False, disabled=False, extra_classes=None):
+    def add_button(self, name, url, active=False, disabled=False,
+                   extra_classes=None):
         item = Button(name, url,
-            active=active,
-            disabled=disabled,
-            extra_classes=extra_classes
+                      active=active,
+                      disabled=disabled,
+                      extra_classes=extra_classes
         )
         self.buttons.append(item)
         return item

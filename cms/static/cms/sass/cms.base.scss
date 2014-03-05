@@ -12,9 +12,9 @@
 .cms_reset {
 	div, p, a, a:hover, a:active, a:focus, ul, li,
 	form, fieldset, label, input, textarea {
-		font:normal 13px/20px "Helvetica Neue",Helvetica,Arial,sans-serif;
-		color:#222; font-weight:normal; text-decoration:none; text-align:left; outline:none;
-		list-style-type:none; list-style-type:none; height:auto; padding:0; margin:0; border:none; background:none;
+		font:normal 13px/20px Helvetica,Arial,sans-serif;
+		color:#222; text-decoration:none; text-align:left; outline:none;
+		list-style-type:none; height:auto; padding:0; margin:0; border:none; background:none;
 	}
 }
 
@@ -50,7 +50,8 @@
 //##################################################
 // #GLOBALS#
 .cms_toolbar-noscroll { position:fixed; overflow-y:scroll; width:100%; }
-#djDebug #djDebugToolbarHandle { top:35px !important; border-right:none !important; }
+// removed as of: //github.com/divio/django-cms/issues/2476
+// #djDebug #djDebugToolbarHandle { top:35px !important; border-right:none !important; }
 
 //##################################################
 // #TOOLBAR#

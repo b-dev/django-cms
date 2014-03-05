@@ -12,14 +12,14 @@ $(document).ready(function () {
 		implement: [CMS.API.Helpers],
 
 		options: {
+			'onClose': false,
+			'minHeight': 400,
+			'minWidth': 800,
 			'modalDuration': 300,
+			'newPlugin': false,
 			'urls': {
 				'css_modal': 'cms/css/plugins/cms.toolbar.modal.css'
-			},
-			'minHeight': 400,
-			'minWidth': 600,
-			'onClose': false,
-			'newPlugin': false
+			}
 		},
 
 		initialize: function (options) {
@@ -35,8 +35,8 @@ $(document).ready(function () {
 			this.click = (document.ontouchstart !== null) ? 'click.cms' : 'touchend.cms';
 			this.maximized = false;
 			this.minimized = false;
-			this.enforceReload = false;
-			this.enforceClose = false;
+			this.triggerMaximized = false;
+			this.saved = false;
 
 			// if the modal is initialized the first time, set the events
 			if(!this.modal.data('ready')) this._events();
@@ -57,6 +57,9 @@ $(document).ready(function () {
 			this.modal.find('.cms_modal-title').bind('mousedown.cms', function (e) {
 				e.preventDefault();
 				that._startMove(e);
+			});
+			this.modal.find('.cms_modal-title').bind('dblclick.cms', function () {
+				that._maximize();
 			});
 			this.modal.find('.cms_modal-resize').bind('mousedown.cms', function (e) {
 				e.preventDefault();
@@ -113,10 +116,13 @@ $(document).ready(function () {
 				'margin-right': 0
 			});
 			// lets set the modal width and height to the size of the browser
-			var widthOffset = 300;
-			var heightOffset = 350;
-			var width = ($(window).width() >= this.options.minWidth + widthOffset) ? $(window).width() - widthOffset : this.options.minWidth;
-			var height = ($(window).height() >= this.options.minHeight + heightOffset) ? $(window).height() - heightOffset : this.options.minHeight;
+			var widthOffset = 300; // adds margin left and right
+			var heightOffset = 350; // adds margin top and bottom;
+			var screenWidth = $(window).width(); // it has to be the height of the window not computer screen
+			var screenHeight = $(window).height(); // it has to be the height of the window and not computer screen
+
+			var width = (screenWidth >= this.options.minWidth + widthOffset) ? screenWidth - widthOffset : this.options.minWidth;
+			var height = (screenHeight >= this.options.minHeight + heightOffset) ? screenHeight - heightOffset : this.options.minHeight;
 			this.modal.find('.cms_modal-body').css({
 				'width': width,
 				'height': height
@@ -124,6 +130,8 @@ $(document).ready(function () {
 			this.modal.find('.cms_modal-body').removeClass('cms_loader');
 			this.modal.find('.cms_modal-maximize').removeClass('cms_modal-maximize-active');
 			this.maximized = false;
+			// in case, the window is larger than the windows height, we trigger fullscreen mode
+			if(height >= screenHeight) this.triggerMaximized = true;
 
 			// we need to render the breadcrumb
 			this._setBreadcrumb(breadcrumb);
@@ -141,18 +149,15 @@ $(document).ready(function () {
 				var text = this.config.lang.confirm;
 
 				// trigger an ajax request
-				CMS.API.Toolbar.openAjax(data.delete, post, text, function () {
+				CMS.API.Toolbar.openAjax(data['delete'], post, text, function () {
 					that._hide(100);
 				});
 			} else {
 				this._hide(100);
 			}
+
 			// handle refresh option
-			if(this.options.onClose === 'REFRESH_PAGE') {
-				this.reloadBrowser();
-			} else if(this.options.redirectOnClose) {
-				this.reloadBrowser(this.options.redirectOnClose);
-			}
+			if(this.options.onClose) this.reloadBrowser(this.options.onClose, false, true);
 		},
 
 		// private methods
@@ -186,6 +191,9 @@ $(document).ready(function () {
 
 				// hide loader
 				CMS.API.Toolbar._loader(false);
+
+				// check if we should maximize
+				if(that.triggerMaximized) that._maximize();
 			});
 
 			// prevent scrolling
@@ -315,8 +323,8 @@ $(document).ready(function () {
 			this.modal.find('.cms_modal-shim').show();
 
 			$(document).bind('mousemove.cms', function (e) {
-				var left = position.left - (initial.pageX - e.pageX) - $(window).scrollLeft();
-				var top = position.top - (initial.pageY - e.pageY) - $(window).scrollTop();
+				var left = position.left - (initial.pageX - e.pageX);
+				var top = position.top - (initial.pageY - e.pageY);
 
 				that.modal.css({
 					'left': left,
@@ -362,7 +370,7 @@ $(document).ready(function () {
 				});
 				that.modal.css({
 					'left': modalLeft + mvX,
-					'top': modalTop + mvY - $(window).scrollTop()
+					'top': modalTop + mvY
 				});
 			});
 		},
@@ -399,19 +407,18 @@ $(document).ready(function () {
 		_setButtons: function (iframe) {
 			var that = this;
 			var row = iframe.contents().find('.submit-row:eq(0)');
+				row.hide(); // hide submit-row
 			var buttons = row.find('input, a');
 			var render = $('<span />'); // seriously jquery...
 
-			// if there are no buttons, try again
+			// if there are no given buttons within the submit-row area
+			// scan deeper within the form itself
 			if(!buttons.length) {
 				row = iframe.contents().find('form:eq(0)');
 				buttons = row.find('input[type="submit"]');
 				buttons.attr('name', '_save')
 					.addClass('deletelink')
 					.hide();
-				this.enforceReload = true;
-			} else {
-				this.enforceReload = false;
 			}
 
 			// attach relation id
@@ -434,7 +441,7 @@ $(document).ready(function () {
 				if(item.hasClass('default')) cls = 'cms_btn cms_btn-action';
 				if(item.hasClass('deletelink')) cls = 'cms_btn cms_btn-caution';
 
-				// create the element
+				// create the element and attach events
 				var el = $('<div class="'+cls+' '+item.attr('class')+'">'+title+'</div>');
 					el.bind(that.click, function () {
 						if(item.is('input')) item[0].click();
@@ -443,12 +450,12 @@ $(document).ready(function () {
 						// trigger only when blue action buttons are triggered
 						if(item.hasClass('default') || item.hasClass('deletelink')) {
  							that.options.newPlugin = null;
-							that.enforceClose = true;
-							if(item.hasClass('deletelink')) {
-								that.options.onClose = null;
-							}
-						} else {
-							that.enforceClose = false;
+ 							// reset onClose when delete is triggered
+							if(item.hasClass('deletelink')) that.options.onClose = null;
+							// hide iframe
+							that.modal.find('.cms_modal-frame iframe').css('visibility', 'hidden');
+							// page has been saved or deleted, run checkup
+							that.saved = true;
 						}
 					});
 
@@ -462,9 +469,6 @@ $(document).ready(function () {
 					that.close();
 				});
 			render.append(cancel);
-
-			// unwrap helper and ide row
-			row.hide();
 
 			// render buttons
 			this.modal.find('.cms_modal-buttons').html(render);
@@ -482,7 +486,7 @@ $(document).ready(function () {
 			var title = this.modal.find('.cms_modal-title');
 				title.html(name || '&nbsp;');
 
-			// insure previous iframe is hidden
+			// ensure previous iframe is hidden
 			holder.find('iframe').css('visibility', 'hidden');
 
 			// attach load event for iframe to prevent flicker effects
@@ -491,6 +495,7 @@ $(document).ready(function () {
 				var messages = iframe.contents().find('.messagelist li');
 					if(messages.length) CMS.API.Toolbar.openMessage(messages.eq(0).text());
 					messages.remove();
+				var contents = iframe.contents();
 
 				// determine if we should close the modal or reload
 				if(messages.length && that.enforceReload) that.reloadBrowser();
@@ -500,26 +505,42 @@ $(document).ready(function () {
 				}
 
 				// after iframe is loaded append css
-				iframe.contents().find('head').append($('<link rel="stylesheet" type="text/css" href="' + that.config.urls.static + that.options.urls.css_modal + '" />'));
-
-				// set title of not provided
-				var innerTitle = iframe.contents().find('#content h1:eq(0)');
-				if(name === undefined) title.html(innerTitle.text());
-				innerTitle.remove();
+				contents.find('head').append($('<link rel="stylesheet" type="text/css" href="' + that.config.urls.static + that.options.urls.css_modal + '" />'));
 
 				// set modal buttons
-				that._setButtons($(this));
+  				that._setButtons($(this));
 
-				// than show
-				iframe.css('visibility','visible');
+				// when an error occurs, reset the saved status so the form can be checked and validated again
+				if(iframe.contents().find('.errornote').length || iframe.contents().find('.errorlist').length) {
+					that.saved = false;
+				}
 
-				// append ready state
-				iframe.data('ready', true);
+				// when the window has been changed pressing the blue or red button, we need to run a reload check
+				if(that.saved) {
+					iframe.hide();
+					that.reloadBrowser(window.location.href, false, true);
+				} else {
+					// set title of not provided
+					var innerTitle = iframe.contents().find('#content h1:eq(0)');
+					if(name === undefined) title.html(innerTitle.text());
+					innerTitle.remove();
 
-				// attach close event
-				iframe.contents().find('body').bind('keydown.cms', function (e) {
-					if(e.keyCode === 27) that.close();
-				});
+					// than show
+					iframe.css('visibility', 'visible');
+
+					// append ready state
+					iframe.data('ready', true);
+
+					// attach close event
+					contents.find('body').bind('keydown.cms', function (e) {
+						if(e.keyCode === 27) that.close();
+					});
+
+					// figure out if .object-tools is available
+					if(contents.find('.object-tools').length) {
+						contents.find('#content').css('padding-top', 38);
+					}
+				}
 			});
 
 			// inject

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 from datetime import date
-import os
-import warnings
 import json
 
+import os
+import warnings
 from cms.exceptions import DontUsePageAttributeWarning
 from cms.models.placeholdermodel import Placeholder
 from cms.plugin_rendering import PluginContext, render_plugin
@@ -52,18 +52,6 @@ class PluginModelBase(MPTTModelBase):
 
         # set a new BoundRenderMeta to prevent leaking of state
         new_class._render_meta = BoundRenderMeta(meta)
-
-        # turn 'myapp_mymodel' into 'cmsplugin_mymodel' by removing the
-        # 'myapp_' bit from the db_table name.
-        if [base for base in bases if isinstance(base, PluginModelBase)]:
-            splitter = '%s_' % new_class._meta.app_label
-
-            if splitter in new_class._meta.db_table:
-                splitted = new_class._meta.db_table.split(splitter, 1)
-                table_name = 'cmsplugin_%s' % splitted[1]
-            else:
-                table_name = new_class._meta.db_table
-            new_class._meta.db_table = table_name
 
         return new_class
 
@@ -176,11 +164,9 @@ class CMSPlugin(with_metaclass(PluginModelBase, MPTTModel)):
         return self._inst, plugin
 
     def render_plugin(self, context=None, placeholder=None, admin=False, processors=None):
-
         instance, plugin = self.get_plugin_instance()
-
         if instance and not (admin and not plugin.admin_preview):
-            if not isinstance(placeholder, Placeholder):
+            if not placeholder or not isinstance(placeholder, Placeholder):
                 placeholder = instance.placeholder
             placeholder_slot = placeholder.slot
             current_app = context.current_app if context else None
@@ -200,7 +186,10 @@ class CMSPlugin(with_metaclass(PluginModelBase, MPTTModel)):
             return render_plugin(context, instance, placeholder, template, processors, context.current_app)
         else:
             from cms.middleware.toolbar import toolbar_plugin_processor
+
             if processors and toolbar_plugin_processor in processors:
+                if not placeholder:
+                    placeholder = self.placeholder
                 current_app = context.current_app if context else None
                 context = PluginContext(context, self, placeholder, current_app=current_app)
                 template = None
@@ -277,13 +266,18 @@ class CMSPlugin(with_metaclass(PluginModelBase, MPTTModel)):
         # we assign a parent to our new plugin
         parent_cache[self.pk] = new_plugin
         if self.parent:
-            new_plugin.parent = parent_cache[self.parent_id]
+            parent = parent_cache[self.parent_id]
+            parent = CMSPlugin.objects.get(pk=parent.pk)
+            new_plugin.parent = parent
         new_plugin.level = None
         new_plugin.language = target_language
         new_plugin.plugin_type = self.plugin_type
         new_plugin.position = self.position
         new_plugin.save()
         if plugin_instance:
+            if plugin_instance.__class__ == CMSPlugin:
+                #get a new instance so references do not get mixed up
+                plugin_instance = CMSPlugin.objects.get(pk=plugin_instance.pk)
             plugin_instance.pk = new_plugin.pk
             plugin_instance.id = new_plugin.pk
             plugin_instance.placeholder = target_placeholder
@@ -294,7 +288,8 @@ class CMSPlugin(with_metaclass(PluginModelBase, MPTTModel)):
             plugin_instance.cmsplugin_ptr = new_plugin
             plugin_instance.language = target_language
             plugin_instance.parent = new_plugin.parent
-            plugin_instance.position = new_plugin.position  # added to retain the position when creating a public copy of a plugin
+            # added to retain the position when creating a public copy of a plugin
+            plugin_instance.position = new_plugin.position
             plugin_instance.save()
             old_instance = plugin_instance.__class__.objects.get(pk=self.pk)
             plugin_instance.copy_relations(old_instance)
@@ -343,10 +338,8 @@ class CMSPlugin(with_metaclass(PluginModelBase, MPTTModel)):
     def get_breadcrumb(self):
         from cms.models import Page
 
-        models = self.placeholder._get_attached_models()
-        if models:
-            model = models[0]
-        else:
+        model = self.placeholder._get_attached_model()
+        if not model:
             model = Page
         breadcrumb = []
         if not self.parent_id:
@@ -381,11 +374,30 @@ class CMSPlugin(with_metaclass(PluginModelBase, MPTTModel)):
         if self.child_plugin_instances:
             return len(self.child_plugin_instances)
 
+    def notify_on_autoadd(self, request, conf):
+        """
+        Method called when we auto add this plugin via default_plugins in 
+        CMS_PLACEHOLDER_CONF.
+        Some specific plugins may have some special stuff to do when they are
+        auto added.
+        """
+        pass
+
+    def notify_on_autoadd_children(self, request, conf, children):
+        """
+        Method called when we auto add children to this plugin via 
+        default_plugins/<plugin>/children in CMS_PLACEHOLDER_CONF.
+        Some specific plugins may have some special stuff to do when we add
+        children to them. ie : TextPlugin must update its content to add HTML 
+        tags to be able to see his children in WYSIWYG.
+        """
+        pass
+
     def get_translatable_content(self):
         fields = []
         for field in self._meta.fields:
             if ((isinstance(field, models.CharField) or isinstance(field, models.TextField)) and not field.choices and
-                    field.editable and field.name not in self.translatable_content_excluded_fields and field):
+                field.editable and field.name not in self.translatable_content_excluded_fields and field):
                 fields.append(field)
 
         translatable_fields = {}
@@ -408,6 +420,7 @@ class CMSPlugin(with_metaclass(PluginModelBase, MPTTModel)):
                 return False
 
         return True
+
 
 reversion_register(CMSPlugin)
 

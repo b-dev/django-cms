@@ -31,6 +31,7 @@ $(document).ready(function () {
 			this.buttons = this.container.find('.cms_toolbar-item-buttons');
 			this.switcher = this.container.find('.cms_toolbar-item_switch');
 			this.messages = this.container.find('.cms_messages');
+			this.screenBlock = this.container.find('.cms_screenblock');
 
 			// states
 			this.click = (document.ontouchstart !== null) ? 'click.cms' : 'touchend.cms';
@@ -57,11 +58,6 @@ $(document).ready(function () {
 			// add toolbar ready class to body
 			this.body.addClass('cms_toolbar-ready');
 
-			// check if we need to reset the current settings depending on a new release
-			if(CMS.config.settings.version !== this.settings.version) {
-				this.settings = this.setSettings(CMS.config.settings);
-			}
-
 			// check if debug is true
 			if(CMS.config.debug) this._debug();
 
@@ -72,7 +68,10 @@ $(document).ready(function () {
 			if(CMS.config.error) this.showError(CMS.config.error);
 
 			// enforce open state if user is not logged in but requests the toolbar
-			if(!CMS.config.auth) this.toggleToolbar(true);
+			if(!CMS.config.auth || CMS.config.settings.version !== this.settings.version) {
+				this.toggleToolbar(true);
+				this.settings = this.setSettings(CMS.config.settings);
+			}
 
 			// should switcher indicate that there is an unpublished page?
 			if(CMS.config.publisher) {
@@ -87,6 +86,9 @@ $(document).ready(function () {
 				var sideframe = new CMS.Sideframe();
 					sideframe.open(this.settings.sideframe.url, false);
 			}
+
+			// if there is a screenblock, do some resize magic
+			if(this.screenBlock.length) this._screenBlock();
 		},
 
 		_events: function () {
@@ -147,15 +149,16 @@ $(document).ready(function () {
 
 				// attach hover
 				lists.find('li').bind('mouseenter mouseleave', function () {
-					// reset
-					lists.find('li').removeClass(hover);
-
 					var el = $(this);
 					var parent = el.closest('.cms_toolbar-item-navigation-children');
 					var hasChildren = el.hasClass(children) || parent.length;
 
 					// do not attach hover effect if disabled
-					if(el.hasClass(disabled)) return false;
+					// cancel event if element has already hover class
+					if(el.hasClass(disabled) || el.hasClass(hover)) return false;
+
+					// reset
+					lists.find('li').removeClass(hover);
 
 					// add hover effect
 					el.addClass(hover);
@@ -168,6 +171,9 @@ $(document).ready(function () {
 					} else {
 						lists.find('ul ul').hide();
 					}
+
+					// Remove stale submenus
+					el.siblings().find('> ul').hide();
 				});
 
 				// fix leave event
@@ -189,6 +195,13 @@ $(document).ready(function () {
 				$(this).bind(that.click, function (e) {
 					e.preventDefault();
 					that._setSwitcher($(e.currentTarget));
+				});
+			});
+
+			// attach event for first page publish
+			this.buttons.each(function () {
+				$(this).find('.cms_publish-page').bind(that.click, function (e) {
+					if(!confirm(that.config.lang.publish)) e.preventDefault();
 				});
 			});
 		},
@@ -283,7 +296,7 @@ $(document).ready(function () {
 			this._lock(false);
 		},
 
-		openAjax: function (url, post, text, callback) {
+		openAjax: function (url, post, text, callback, onSuccess) {
 			var that = this;
 
 			// check if we have a confirmation text
@@ -298,6 +311,8 @@ $(document).ready(function () {
 				'success': function () {
 					if(callback) {
 						callback(that);
+					} else if(onSuccess) {
+						CMS.API.Helpers.reloadBrowser(onSuccess);
 					} else {
 						// reload
 						CMS.API.Helpers.reloadBrowser();
@@ -318,7 +333,7 @@ $(document).ready(function () {
 			this.toolbarTrigger.addClass('cms_toolbar-trigger-expanded');
 			this.toolbar.slideDown(speed);
 			// animate html
-			this.body.animate({ 'margin-top': (this.config.debug) ? 35 : 30 }, (init) ? 0 : speed);
+			this.body.addClass('cms_toolbar-expanded').animate({ 'margin-top': (this.config.debug) ? 35 : 30 }, (init) ? 0 : speed);
 			// set messages top to toolbar height
 			this.messages.css('top', 31);
 			// set new settings
@@ -333,7 +348,7 @@ $(document).ready(function () {
 			this.toolbarTrigger.removeClass('cms_toolbar-trigger-expanded');
 			this.toolbar.slideUp(speed);
 			// animate html
-			this.body.animate({ 'margin-top': (this.config.debug) ? 5 : 0 }, speed);
+			this.body.removeClass('cms_toolbar-expanded').animate({ 'margin-top': (this.config.debug) ? 5 : 0 }, speed);
 			// set messages top to 0
 			this.messages.css('top', 0);
 			// set new settings
@@ -387,22 +402,22 @@ $(document).ready(function () {
 
 		_delegate: function (el) {
 			// save local vars
-			var target = el.attr('data-rel');
+			var target = el.data('rel');
 
 			switch(target) {
 				case 'modal':
-					var modal = new CMS.Modal({'onClose': el.attr('data-on-close')});
-						modal.open(el.attr('href'), el.attr('data-name'));
+					var modal = new CMS.Modal({'onClose': el.data('on-close')});
+						modal.open(el.attr('href'), el.data('name'));
 					break;
 				case 'message':
-					this.openMessage(el.attr('data-text'));
+					this.openMessage(el.data('text'));
 					break;
 				case 'sideframe':
-					var sideframe = new CMS.Sideframe();
+					var sideframe = new CMS.Sideframe({'onClose': el.data('on-close')});
 						sideframe.open(el.attr('href'), true);
 					break;
 				case 'ajax':
-					this.openAjax(el.attr('href'), el.attr('data-post'), el.attr('data-text'));
+					this.openAjax(el.attr('href'), JSON.stringify(el.data('post')), el.data('text'), null, el.data('on-success'));
 					break;
 				default:
 					window.location.href = el.attr('href');
@@ -445,6 +460,27 @@ $(document).ready(function () {
 						}, timeout);
 					}
 				});
+		},
+
+		_screenBlock: function () {
+			var interval = 20;
+			var blocker = this.screenBlock;
+			var sideframe = $('.cms_sideframe');
+
+			// automatically resize screenblock window according to given attributes
+			$(window).on('resize.cms.screenblock', function () {
+				var width = $(this).width() - sideframe.width();
+
+				blocker.css({
+					'width': width,
+					'height': $(document).height()
+				});
+			}).trigger('resize');
+
+			// set update interval
+			setInterval(function () {
+				$(window).trigger('resize.cms.screenblock');
+			}, interval);
 		}
 
 	});
